@@ -3,14 +3,15 @@ PairList Handler base class
 """
 
 import logging
-from abc import ABC, abstractmethod, abstractproperty
+from abc import ABC, abstractmethod
 from copy import deepcopy
-from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
+from enum import Enum
+from typing import Any, Literal, TypedDict
 
 from freqtrade.constants import Config
 from freqtrade.exceptions import OperationalException
 from freqtrade.exchange import Exchange, market_is_active
-from freqtrade.exchange.types import Ticker, Tickers
+from freqtrade.exchange.exchange_types import Ticker, Tickers
 from freqtrade.mixins import LoggingMixin
 
 
@@ -24,42 +25,60 @@ class __PairlistParameterBase(TypedDict):
 
 class __NumberPairlistParameter(__PairlistParameterBase):
     type: Literal["number"]
-    default: Union[int, float, None]
+    default: int | float | None
 
 
 class __StringPairlistParameter(__PairlistParameterBase):
     type: Literal["string"]
-    default: Union[str, None]
+    default: str | None
 
 
 class __OptionPairlistParameter(__PairlistParameterBase):
     type: Literal["option"]
-    default: Union[str, None]
-    options: List[str]
+    default: str | None
+    options: list[str]
+
+
+class __ListPairListParamenter(__PairlistParameterBase):
+    type: Literal["list"]
+    default: list[str] | None
 
 
 class __BoolPairlistParameter(__PairlistParameterBase):
     type: Literal["boolean"]
-    default: Union[bool, None]
+    default: bool | None
 
 
-PairlistParameter = Union[
-    __NumberPairlistParameter,
-    __StringPairlistParameter,
-    __OptionPairlistParameter,
-    __BoolPairlistParameter,
-]
+PairlistParameter = (
+    __NumberPairlistParameter
+    | __StringPairlistParameter
+    | __OptionPairlistParameter
+    | __BoolPairlistParameter
+    | __ListPairListParamenter
+)
+
+
+class SupportsBacktesting(str, Enum):
+    """
+    Enum to indicate if a Pairlist Handler supports backtesting.
+    """
+
+    YES = "yes"
+    NO = "no"
+    NO_ACTION = "no_action"
+    BIASED = "biased"
 
 
 class IPairList(LoggingMixin, ABC):
     is_pairlist_generator = False
+    supports_backtesting: SupportsBacktesting = SupportsBacktesting.NO
 
     def __init__(
         self,
         exchange: Exchange,
         pairlistmanager,
         config: Config,
-        pairlistconfig: Dict[str, Any],
+        pairlistconfig: dict[str, Any],
         pairlist_pos: int,
     ) -> None:
         """
@@ -87,7 +106,8 @@ class IPairList(LoggingMixin, ABC):
         """
         return self.__class__.__name__
 
-    @abstractproperty
+    @property
+    @abstractmethod
     def needstickers(self) -> bool:
         """
         Boolean property defining if tickers are necessary.
@@ -106,7 +126,7 @@ class IPairList(LoggingMixin, ABC):
         return ""
 
     @staticmethod
-    def available_parameters() -> Dict[str, PairlistParameter]:
+    def available_parameters() -> dict[str, PairlistParameter]:
         """
         Return parameters used by this Pairlist Handler, and their type
         contains a dictionary with the parameter name as key, and a dictionary
@@ -116,7 +136,7 @@ class IPairList(LoggingMixin, ABC):
         return {}
 
     @staticmethod
-    def refresh_period_parameter() -> Dict[str, PairlistParameter]:
+    def refresh_period_parameter() -> dict[str, PairlistParameter]:
         return {
             "refresh_period": {
                 "type": "number",
@@ -133,7 +153,7 @@ class IPairList(LoggingMixin, ABC):
         -> Please overwrite in subclasses
         """
 
-    def _validate_pair(self, pair: str, ticker: Optional[Ticker]) -> bool:
+    def _validate_pair(self, pair: str, ticker: Ticker | None) -> bool:
         """
         Check one pair against Pairlist Handler's specific conditions.
 
@@ -146,7 +166,7 @@ class IPairList(LoggingMixin, ABC):
         """
         raise NotImplementedError()
 
-    def gen_pairlist(self, tickers: Tickers) -> List[str]:
+    def gen_pairlist(self, tickers: Tickers) -> list[str]:
         """
         Generate the pairlist.
 
@@ -165,7 +185,7 @@ class IPairList(LoggingMixin, ABC):
             "at the first position in the list of Pairlist Handlers."
         )
 
-    def filter_pairlist(self, pairlist: List[str], tickers: Tickers) -> List[str]:
+    def filter_pairlist(self, pairlist: list[str], tickers: Tickers) -> list[str]:
         """
         Filters and sorts pairlist and returns the whitelist again.
 
@@ -189,7 +209,7 @@ class IPairList(LoggingMixin, ABC):
 
         return pairlist
 
-    def verify_blacklist(self, pairlist: List[str], logmethod) -> List[str]:
+    def verify_blacklist(self, pairlist: list[str], logmethod) -> list[str]:
         """
         Proxy method to verify_blacklist for easy access for child classes.
         :param pairlist: Pairlist to validate
@@ -199,8 +219,8 @@ class IPairList(LoggingMixin, ABC):
         return self._pairlistmanager.verify_blacklist(pairlist, logmethod)
 
     def verify_whitelist(
-        self, pairlist: List[str], logmethod, keep_invalid: bool = False
-    ) -> List[str]:
+        self, pairlist: list[str], logmethod, keep_invalid: bool = False
+    ) -> list[str]:
         """
         Proxy method to verify_whitelist for easy access for child classes.
         :param pairlist: Pairlist to validate
@@ -210,7 +230,7 @@ class IPairList(LoggingMixin, ABC):
         """
         return self._pairlistmanager.verify_whitelist(pairlist, logmethod, keep_invalid)
 
-    def _whitelist_for_active_markets(self, pairlist: List[str]) -> List[str]:
+    def _whitelist_for_active_markets(self, pairlist: list[str]) -> list[str]:
         """
         Check available markets and remove pair from whitelist if necessary
         :param pairlist: the sorted list of pairs the user might want to trade
@@ -223,7 +243,7 @@ class IPairList(LoggingMixin, ABC):
                 "Markets not loaded. Make sure that exchange is initialized correctly."
             )
 
-        sanitized_whitelist: List[str] = []
+        sanitized_whitelist: list[str] = []
         for pair in pairlist:
             # pair is not in the generated dynamic market or has the wrong stake currency
             if pair not in markets:
