@@ -3,38 +3,31 @@ Price pair list filter
 """
 
 import logging
-from typing import Any, Dict, Optional
 
-from freqtrade.constants import Config
 from freqtrade.exceptions import OperationalException
-from freqtrade.exchange.types import Ticker
-from freqtrade.plugins.pairlist.IPairList import IPairList, PairlistParameter
+from freqtrade.exchange.exchange_types import Ticker
+from freqtrade.plugins.pairlist.IPairList import IPairList, PairlistParameter, SupportsBacktesting
 
 
 logger = logging.getLogger(__name__)
 
 
 class PriceFilter(IPairList):
-    def __init__(
-        self,
-        exchange,
-        pairlistmanager,
-        config: Config,
-        pairlistconfig: Dict[str, Any],
-        pairlist_pos: int,
-    ) -> None:
-        super().__init__(exchange, pairlistmanager, config, pairlistconfig, pairlist_pos)
+    supports_backtesting = SupportsBacktesting.BIASED
 
-        self._low_price_ratio = pairlistconfig.get("low_price_ratio", 0)
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+
+        self._low_price_ratio = self._pairlistconfig.get("low_price_ratio", 0)
         if self._low_price_ratio < 0:
             raise OperationalException("PriceFilter requires low_price_ratio to be >= 0")
-        self._min_price = pairlistconfig.get("min_price", 0)
+        self._min_price = self._pairlistconfig.get("min_price", 0)
         if self._min_price < 0:
             raise OperationalException("PriceFilter requires min_price to be >= 0")
-        self._max_price = pairlistconfig.get("max_price", 0)
+        self._max_price = self._pairlistconfig.get("max_price", 0)
         if self._max_price < 0:
             raise OperationalException("PriceFilter requires max_price to be >= 0")
-        self._max_value = pairlistconfig.get("max_value", 0)
+        self._max_value = self._pairlistconfig.get("max_value", 0)
         if self._max_value < 0:
             raise OperationalException("PriceFilter requires max_value to be >= 0")
         self._enabled = (
@@ -77,7 +70,7 @@ class PriceFilter(IPairList):
         return "Filter pairs by price."
 
     @staticmethod
-    def available_parameters() -> Dict[str, PairlistParameter]:
+    def available_parameters() -> dict[str, PairlistParameter]:
         return {
             "low_price_ratio": {
                 "type": "number",
@@ -107,7 +100,7 @@ class PriceFilter(IPairList):
             },
         }
 
-    def _validate_pair(self, pair: str, ticker: Optional[Ticker]) -> bool:
+    def _validate_pair(self, pair: str, ticker: Ticker | None) -> bool:
         """
         Check if one price-step (pip) is > than a certain barrier.
         :param pair: Pair that's currently validated
@@ -165,8 +158,7 @@ class PriceFilter(IPairList):
         if self._min_price != 0:
             if price < self._min_price:
                 self.log_once(
-                    f"Removed {pair} from whitelist, "
-                    f"because last price < {self._min_price:.8f}",
+                    f"Removed {pair} from whitelist, because last price < {self._min_price:.8f}",
                     logger.info,
                 )
                 return False
@@ -175,8 +167,7 @@ class PriceFilter(IPairList):
         if self._max_price != 0:
             if price > self._max_price:
                 self.log_once(
-                    f"Removed {pair} from whitelist, "
-                    f"because last price > {self._max_price:.8f}",
+                    f"Removed {pair} from whitelist, because last price > {self._max_price:.8f}",
                     logger.info,
                 )
                 return False

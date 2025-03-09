@@ -3,30 +3,23 @@ Offset pair list filter
 """
 
 import logging
-from typing import Any, Dict, List
 
-from freqtrade.constants import Config
 from freqtrade.exceptions import OperationalException
-from freqtrade.exchange.types import Tickers
-from freqtrade.plugins.pairlist.IPairList import IPairList, PairlistParameter
+from freqtrade.exchange.exchange_types import Tickers
+from freqtrade.plugins.pairlist.IPairList import IPairList, PairlistParameter, SupportsBacktesting
 
 
 logger = logging.getLogger(__name__)
 
 
 class OffsetFilter(IPairList):
-    def __init__(
-        self,
-        exchange,
-        pairlistmanager,
-        config: Config,
-        pairlistconfig: Dict[str, Any],
-        pairlist_pos: int,
-    ) -> None:
-        super().__init__(exchange, pairlistmanager, config, pairlistconfig, pairlist_pos)
+    supports_backtesting = SupportsBacktesting.YES
 
-        self._offset = pairlistconfig.get("offset", 0)
-        self._number_pairs = pairlistconfig.get("number_assets", 0)
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+
+        self._offset = self._pairlistconfig.get("offset", 0)
+        self._number_pairs = self._pairlistconfig.get("number_assets", 0)
 
         if self._offset < 0:
             raise OperationalException("OffsetFilter requires offset to be >= 0")
@@ -53,7 +46,7 @@ class OffsetFilter(IPairList):
         return "Offset pair list filter."
 
     @staticmethod
-    def available_parameters() -> Dict[str, PairlistParameter]:
+    def available_parameters() -> dict[str, PairlistParameter]:
         return {
             "offset": {
                 "type": "number",
@@ -69,7 +62,7 @@ class OffsetFilter(IPairList):
             },
         }
 
-    def filter_pairlist(self, pairlist: List[str], tickers: Tickers) -> List[str]:
+    def filter_pairlist(self, pairlist: list[str], tickers: Tickers) -> list[str]:
         """
         Filters and sorts pairlist and returns the whitelist again.
         Called on each bot iteration - please use internal caching if necessary
@@ -85,7 +78,5 @@ class OffsetFilter(IPairList):
         pairs = pairlist[self._offset :]
         if self._number_pairs:
             pairs = pairs[: self._number_pairs]
-
-        self.log_once(f"Searching {len(pairs)} pairs: {pairs}", logger.info)
 
         return pairs

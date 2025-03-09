@@ -13,6 +13,12 @@ from freqtrade.optimize.analysis.lookahead_helpers import LookaheadAnalysisSubFu
 from tests.conftest import EXMS, get_args, log_has_re, patch_exchange
 
 
+IGNORE_BIASED_INDICATORS_CAPTION = (
+    "Any indicators in 'biased_indicators' which are used within "
+    "set_freqai_targets() can be ignored."
+)
+
+
 @pytest.fixture
 def lookahead_conf(default_conf_usdt, tmp_path):
     default_conf_usdt["user_data_dir"] = tmp_path
@@ -133,6 +139,58 @@ def test_lookahead_helper_start(lookahead_conf, mocker) -> None:
     text_table_mock.reset_mock()
 
 
+@pytest.mark.parametrize(
+    "indicators, expected_caption_text",
+    [
+        (
+            ["&indicator1", "indicator2"],
+            IGNORE_BIASED_INDICATORS_CAPTION,
+        ),
+        (
+            ["indicator1", "&indicator2"],
+            IGNORE_BIASED_INDICATORS_CAPTION,
+        ),
+        (
+            ["&indicator1", "&indicator2"],
+            IGNORE_BIASED_INDICATORS_CAPTION,
+        ),
+        (["indicator1", "indicator2"], None),
+        ([], None),
+    ],
+    ids=(
+        "First of two biased indicators starts with '&'",
+        "Second of two biased indicators starts with '&'",
+        "Both biased indicators start with '&'",
+        "No biased indicators start with '&'",
+        "Empty biased indicators list",
+    ),
+)
+def test_lookahead_helper_start__caption_based_on_indicators(
+    indicators, expected_caption_text, lookahead_conf, mocker
+):
+    """Test that the table caption is only populated if a biased_indicator starts with '&'."""
+
+    single_mock = MagicMock()
+    lookahead_analysis = LookaheadAnalysis(
+        lookahead_conf,
+        {"name": "strategy_test_v3_with_lookahead_bias"},
+    )
+    lookahead_analysis.current_analysis.false_indicators = indicators
+    single_mock.return_value = lookahead_analysis
+    text_table_mock = MagicMock()
+    mocker.patch.multiple(
+        "freqtrade.optimize.analysis.lookahead_helpers.LookaheadAnalysisSubFunctions",
+        initialize_single_lookahead_analysis=single_mock,
+        text_table_lookahead_analysis_instances=text_table_mock,
+    )
+
+    LookaheadAnalysisSubFunctions.start(lookahead_conf)
+
+    text_table_mock.assert_called_once_with(
+        lookahead_conf, [lookahead_analysis], caption=expected_caption_text
+    )
+
+
 def test_lookahead_helper_text_table_lookahead_analysis_instances(lookahead_conf):
     analysis = Analysis()
     analysis.has_bias = True
@@ -147,7 +205,7 @@ def test_lookahead_helper_text_table_lookahead_analysis_instances(lookahead_conf
 
     instance = LookaheadAnalysis(lookahead_conf, strategy_obj)
     instance.current_analysis = analysis
-    _table, _headers, data = LookaheadAnalysisSubFunctions.text_table_lookahead_analysis_instances(
+    data = LookaheadAnalysisSubFunctions.text_table_lookahead_analysis_instances(
         lookahead_conf, [instance]
     )
 
@@ -163,14 +221,14 @@ def test_lookahead_helper_text_table_lookahead_analysis_instances(lookahead_conf
     analysis.false_exit_signals = 10
     instance = LookaheadAnalysis(lookahead_conf, strategy_obj)
     instance.current_analysis = analysis
-    _table, _headers, data = LookaheadAnalysisSubFunctions.text_table_lookahead_analysis_instances(
+    data = LookaheadAnalysisSubFunctions.text_table_lookahead_analysis_instances(
         lookahead_conf, [instance]
     )
     assert data[0][2].__contains__("error")
 
     # edit it into not showing an error
     instance.failed_bias_check = False
-    _table, _headers, data = LookaheadAnalysisSubFunctions.text_table_lookahead_analysis_instances(
+    data = LookaheadAnalysisSubFunctions.text_table_lookahead_analysis_instances(
         lookahead_conf, [instance]
     )
     assert data[0][0] == "strategy_test_v3_with_lookahead_bias.py"
@@ -183,7 +241,7 @@ def test_lookahead_helper_text_table_lookahead_analysis_instances(lookahead_conf
 
     analysis.false_indicators.append("falseIndicator1")
     analysis.false_indicators.append("falseIndicator2")
-    _table, _headers, data = LookaheadAnalysisSubFunctions.text_table_lookahead_analysis_instances(
+    data = LookaheadAnalysisSubFunctions.text_table_lookahead_analysis_instances(
         lookahead_conf, [instance]
     )
 
@@ -193,10 +251,57 @@ def test_lookahead_helper_text_table_lookahead_analysis_instances(lookahead_conf
     assert len(data) == 1
 
     # check amount of multiple rows
-    _table, _headers, data = LookaheadAnalysisSubFunctions.text_table_lookahead_analysis_instances(
+    data = LookaheadAnalysisSubFunctions.text_table_lookahead_analysis_instances(
         lookahead_conf, [instance, instance, instance]
     )
     assert len(data) == 3
+
+
+@pytest.mark.parametrize(
+    "caption",
+    [
+        "",
+        "A test caption",
+        None,
+        False,
+    ],
+    ids=(
+        "Pass empty string",
+        "Pass non-empty string",
+        "Pass None",
+        "Don't pass caption",
+    ),
+)
+def test_lookahead_helper_text_table_lookahead_analysis_instances__caption(
+    caption,
+    lookahead_conf,
+    mocker,
+):
+    """Test that the caption is passed in the table kwargs when calling print_rich_table()."""
+
+    print_rich_table_mock = MagicMock()
+    mocker.patch(
+        "freqtrade.optimize.analysis.lookahead_helpers.print_rich_table",
+        print_rich_table_mock,
+    )
+    lookahead_analysis = LookaheadAnalysis(
+        lookahead_conf,
+        {
+            "name": "strategy_test_v3_with_lookahead_bias",
+            "location": Path(lookahead_conf["strategy_path"], f"{lookahead_conf['strategy']}.py"),
+        },
+    )
+    kwargs = {}
+    if caption is not False:
+        kwargs["caption"] = caption
+
+    LookaheadAnalysisSubFunctions.text_table_lookahead_analysis_instances(
+        lookahead_conf, [lookahead_analysis], **kwargs
+    )
+
+    assert print_rich_table_mock.call_args[-1]["table_kwargs"]["caption"] == (
+        caption if caption is not False else None
+    )
 
 
 def test_lookahead_helper_export_to_csv(lookahead_conf):

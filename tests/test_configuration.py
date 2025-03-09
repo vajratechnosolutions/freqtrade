@@ -27,7 +27,7 @@ from freqtrade.configuration.load_config import (
 )
 from freqtrade.constants import DEFAULT_DB_DRYRUN_URL, DEFAULT_DB_PROD_URL, ENV_VAR_PREFIX
 from freqtrade.enums import RunMode
-from freqtrade.exceptions import OperationalException
+from freqtrade.exceptions import ConfigurationError, OperationalException
 from tests.conftest import (
     CURRENT_TEST_STRATEGY,
     log_has,
@@ -111,7 +111,7 @@ def test_load_config_file_error_range(default_conf, mocker, caplog) -> None:
 
     x = log_config_error_range("somefile", "Parse error at offset 4: Invalid value.")
     assert isinstance(x, str)
-    assert x == '  "max_open_trades": 1,\n  "stake_currency": "BTC",\n' '  "stake_amount": .001,'
+    assert x == '  "max_open_trades": 1,\n  "stake_currency": "BTC",\n  "stake_amount": .001,'
 
     x = log_config_error_range("-", "")
     assert x == ""
@@ -401,11 +401,11 @@ def test_load_dry_run(default_conf, mocker, config_value, expected, arglist) -> 
     assert validated_conf["runmode"] == (RunMode.DRY_RUN if expected else RunMode.LIVE)
 
 
-def test_load_custom_strategy(default_conf, mocker) -> None:
+def test_load_custom_strategy(default_conf, mocker, tmp_path) -> None:
     default_conf.update(
         {
             "strategy": "CustomStrategy",
-            "strategy_path": "/tmp/strategies",
+            "strategy_path": f"{tmp_path}/strategies",
         }
     )
     patched_configuration_load_config_file(mocker, default_conf)
@@ -415,7 +415,7 @@ def test_load_custom_strategy(default_conf, mocker) -> None:
     validated_conf = configuration.load_config()
 
     assert validated_conf.get("strategy") == "CustomStrategy"
-    assert validated_conf.get("strategy_path") == "/tmp/strategies"
+    assert validated_conf.get("strategy_path") == f"{tmp_path}/strategies"
 
 
 def test_show_info(default_conf, mocker, caplog) -> None:
@@ -469,7 +469,7 @@ def test_setup_configuration_without_arguments(mocker, default_conf, caplog) -> 
     assert "timerange" not in config
 
 
-def test_setup_configuration_with_arguments(mocker, default_conf, caplog) -> None:
+def test_setup_configuration_with_arguments(mocker, default_conf, caplog, tmp_path) -> None:
     patched_configuration_load_config_file(mocker, default_conf)
     mocker.patch("freqtrade.configuration.configuration.create_datadir", lambda c, x: x)
     mocker.patch(
@@ -485,11 +485,10 @@ def test_setup_configuration_with_arguments(mocker, default_conf, caplog) -> Non
         "--datadir",
         "/foo/bar",
         "--userdir",
-        "/tmp/freqtrade",
+        f"{tmp_path}/freqtrade",
         "--timeframe",
         "1m",
         "--enable-position-stacking",
-        "--disable-max-market-positions",
         "--timerange",
         ":100",
         "--export",
@@ -509,7 +508,7 @@ def test_setup_configuration_with_arguments(mocker, default_conf, caplog) -> Non
     assert "pair_whitelist" in config["exchange"]
     assert "datadir" in config
     assert log_has("Using data directory: {} ...".format("/foo/bar"), caplog)
-    assert log_has("Using user-data directory: {} ...".format(Path("/tmp/freqtrade")), caplog)
+    assert log_has(f"Using user-data directory: {tmp_path / 'freqtrade'} ...", caplog)
     assert "user_data_dir" in config
 
     assert "timeframe" in config
@@ -517,10 +516,6 @@ def test_setup_configuration_with_arguments(mocker, default_conf, caplog) -> Non
 
     assert "position_stacking" in config
     assert log_has("Parameter --enable-position-stacking detected ...", caplog)
-
-    assert "use_max_market_positions" in config
-    assert log_has("Parameter --disable-max-market-positions detected ...", caplog)
-    assert log_has("max_open_trades set to unlimited ...", caplog)
 
     assert "timerange" in config
     assert log_has("Parameter --timerange detected: {} ...".format(config["timerange"]), caplog)
@@ -569,8 +564,6 @@ def test_setup_configuration_with_stratlist(mocker, default_conf, caplog) -> Non
     assert log_has("Using strategy list of 2 strategies", caplog)
 
     assert "position_stacking" not in config
-
-    assert "use_max_market_positions" not in config
 
     assert "timerange" not in config
 
@@ -812,46 +805,6 @@ def test_validate_whitelist(default_conf):
     validate_config_consistency(conf)
 
 
-@pytest.mark.parametrize(
-    "protconf,expected",
-    [
-        ([], None),
-        ([{"method": "StoplossGuard", "lookback_period": 2000, "stop_duration_candles": 10}], None),
-        ([{"method": "StoplossGuard", "lookback_period_candles": 20, "stop_duration": 10}], None),
-        (
-            [
-                {
-                    "method": "StoplossGuard",
-                    "lookback_period_candles": 20,
-                    "lookback_period": 2000,
-                    "stop_duration": 10,
-                }
-            ],
-            r"Protections must specify either `lookback_period`.*",
-        ),
-        (
-            [
-                {
-                    "method": "StoplossGuard",
-                    "lookback_period": 20,
-                    "stop_duration": 10,
-                    "stop_duration_candles": 10,
-                }
-            ],
-            r"Protections must specify either `stop_duration`.*",
-        ),
-    ],
-)
-def test_validate_protections(default_conf, protconf, expected):
-    conf = deepcopy(default_conf)
-    conf["protections"] = protconf
-    if expected:
-        with pytest.raises(OperationalException, match=expected):
-            validate_config_consistency(conf)
-    else:
-        validate_config_consistency(conf)
-
-
 def test_validate_ask_orderbook(default_conf, caplog) -> None:
     conf = deepcopy(default_conf)
     conf["exit_pricing"]["use_order_book"] = True
@@ -1082,6 +1035,29 @@ def test__validate_consumers(default_conf, caplog) -> None:
     )
     validate_config_consistency(conf)
     assert log_has_re("To receive best performance with external data.*", caplog)
+
+
+def test__validate_orderflow(default_conf) -> None:
+    conf = deepcopy(default_conf)
+    conf["exchange"]["use_public_trades"] = True
+    with pytest.raises(
+        ConfigurationError,
+        match="Orderflow is a required configuration key when using public trades.",
+    ):
+        validate_config_consistency(conf)
+
+    conf.update(
+        {
+            "orderflow": {
+                "scale": 0.5,
+                "stacked_imbalance_range": 3,
+                "imbalance_volume": 100,
+                "imbalance_ratio": 3,
+            }
+        }
+    )
+    # Should pass.
+    validate_config_consistency(conf)
 
 
 def test_load_config_test_comments() -> None:
@@ -1491,8 +1467,8 @@ def test_process_deprecated_protections(default_conf, caplog):
     assert not log_has(message, caplog)
 
     config["protections"] = []
-    process_temporary_deprecated_settings(config)
-    assert log_has(message, caplog)
+    with pytest.raises(ConfigurationError, match=message):
+        process_temporary_deprecated_settings(config)
 
 
 def test_flat_vars_to_nested_dict(caplog):
@@ -1505,6 +1481,12 @@ def test_flat_vars_to_nested_dict(caplog):
         "FREQTRADE__STAKE_AMOUNT": "200.05",
         "FREQTRADE__TELEGRAM__CHAT_ID": "2151",
         "NOT_RELEVANT": "200.0",  # Will be ignored
+        "FREQTRADE__ARRAY": '[{"name":"default","host":"xxx"}]',
+        "FREQTRADE__EXCHANGE__PAIR_WHITELIST": '["BTC/USDT", "ETH/USDT"]',
+        # Fails due to trailing comma
+        "FREQTRADE__ARRAY_TRAIL_COMMA": '[{"name":"default","host":"xxx",}]',
+        # Object fails
+        "FREQTRADE__OBJECT": '{"name":"default","host":"xxx"}',
     }
     expected = {
         "stake_amount": 200.05,
@@ -1518,8 +1500,12 @@ def test_flat_vars_to_nested_dict(caplog):
             },
             "some_setting": True,
             "some_false_setting": False,
+            "pair_whitelist": ["BTC/USDT", "ETH/USDT"],
         },
         "telegram": {"chat_id": "2151"},
+        "array": [{"name": "default", "host": "xxx"}],
+        "object": '{"name":"default","host":"xxx"}',
+        "array_trail_comma": '[{"name":"default","host":"xxx",}]',
     }
     res = _flat_vars_to_nested_dict(test_args, ENV_VAR_PREFIX)
     assert res == expected
@@ -1611,9 +1597,12 @@ def test_sanitize_config(default_conf_usdt):
     res = sanitize_config(default_conf_usdt)
     # Didn't modify original dict
     assert default_conf_usdt["exchange"]["key"] != "REDACTED"
+    assert "accountId" not in default_conf_usdt["exchange"]
 
     assert res["exchange"]["key"] == "REDACTED"
     assert res["exchange"]["secret"] == "REDACTED"
+    # Didn't add a non-existing key
+    assert "accountId" not in res["exchange"]
 
     res = sanitize_config(default_conf_usdt, show_sensitive=True)
     assert res["exchange"]["key"] == default_conf_usdt["exchange"]["key"]
