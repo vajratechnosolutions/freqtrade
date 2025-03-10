@@ -5,17 +5,16 @@ Volatility pairlist filter
 import logging
 import sys
 from datetime import timedelta
-from typing import Any, Dict, List, Optional
 
 import numpy as np
 from cachetools import TTLCache
 from pandas import DataFrame
 
-from freqtrade.constants import Config, ListPairsWithTimeframes
+from freqtrade.constants import ListPairsWithTimeframes
 from freqtrade.exceptions import OperationalException
-from freqtrade.exchange.types import Tickers
+from freqtrade.exchange.exchange_types import Tickers
 from freqtrade.misc import plural
-from freqtrade.plugins.pairlist.IPairList import IPairList, PairlistParameter
+from freqtrade.plugins.pairlist.IPairList import IPairList, PairlistParameter, SupportsBacktesting
 from freqtrade.util import dt_floor_day, dt_now, dt_ts
 
 
@@ -27,26 +26,21 @@ class VolatilityFilter(IPairList):
     Filters pairs by volatility
     """
 
-    def __init__(
-        self,
-        exchange,
-        pairlistmanager,
-        config: Config,
-        pairlistconfig: Dict[str, Any],
-        pairlist_pos: int,
-    ) -> None:
-        super().__init__(exchange, pairlistmanager, config, pairlistconfig, pairlist_pos)
+    supports_backtesting = SupportsBacktesting.NO
 
-        self._days = pairlistconfig.get("lookback_days", 10)
-        self._min_volatility = pairlistconfig.get("min_volatility", 0)
-        self._max_volatility = pairlistconfig.get("max_volatility", sys.maxsize)
-        self._refresh_period = pairlistconfig.get("refresh_period", 1440)
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+
+        self._days = self._pairlistconfig.get("lookback_days", 10)
+        self._min_volatility = self._pairlistconfig.get("min_volatility", 0)
+        self._max_volatility = self._pairlistconfig.get("max_volatility", sys.maxsize)
+        self._refresh_period = self._pairlistconfig.get("refresh_period", 1440)
         self._def_candletype = self._config["candle_type_def"]
-        self._sort_direction: Optional[str] = pairlistconfig.get("sort_direction", None)
+        self._sort_direction: str | None = self._pairlistconfig.get("sort_direction", None)
 
         self._pair_cache: TTLCache = TTLCache(maxsize=1000, ttl=self._refresh_period)
 
-        candle_limit = exchange.ohlcv_candle_limit("1d", self._config["candle_type_def"])
+        candle_limit = self._exchange.ohlcv_candle_limit("1d", self._config["candle_type_def"])
         if self._days < 1:
             raise OperationalException("VolatilityFilter requires lookback_days to be >= 1")
         if self._days > candle_limit:
@@ -84,7 +78,7 @@ class VolatilityFilter(IPairList):
         return "Filter pairs by their recent volatility."
 
     @staticmethod
-    def available_parameters() -> Dict[str, PairlistParameter]:
+    def available_parameters() -> dict[str, PairlistParameter]:
         return {
             "lookback_days": {
                 "type": "number",
@@ -114,7 +108,7 @@ class VolatilityFilter(IPairList):
             **IPairList.refresh_period_parameter(),
         }
 
-    def filter_pairlist(self, pairlist: List[str], tickers: Tickers) -> List[str]:
+    def filter_pairlist(self, pairlist: list[str], tickers: Tickers) -> list[str]:
         """
         Validate trading range
         :param pairlist: pairlist to filter or sort
@@ -128,8 +122,8 @@ class VolatilityFilter(IPairList):
         since_ms = dt_ts(dt_floor_day(dt_now()) - timedelta(days=self._days))
         candles = self._exchange.refresh_ohlcv_with_cache(needed_pairs, since_ms=since_ms)
 
-        resulting_pairlist: List[str] = []
-        volatilitys: Dict[str, float] = {}
+        resulting_pairlist: list[str] = []
+        volatilitys: dict[str, float] = {}
         for p in pairlist:
             daily_candles = candles.get((p, "1d", self._def_candletype), None)
 
@@ -152,7 +146,7 @@ class VolatilityFilter(IPairList):
             )
         return resulting_pairlist
 
-    def _calculate_volatility(self, pair: str, daily_candles: DataFrame) -> Optional[float]:
+    def _calculate_volatility(self, pair: str, daily_candles: DataFrame) -> float | None:
         # Check symbol in cache
         if (volatility_avg := self._pair_cache.get(pair, None)) is not None:
             return volatility_avg
