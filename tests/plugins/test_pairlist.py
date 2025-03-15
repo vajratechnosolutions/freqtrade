@@ -38,6 +38,7 @@ TESTABLE_PAIRLISTS = [p for p in AVAILABLE_PAIRLISTS if p not in ["RemotePairLis
 
 @pytest.fixture(scope="function")
 def whitelist_conf(default_conf):
+    default_conf["runmode"] = "dry_run"
     default_conf["stake_currency"] = "BTC"
     default_conf["exchange"]["pair_whitelist"] = [
         "ETH/BTC",
@@ -68,6 +69,7 @@ def whitelist_conf(default_conf):
 
 @pytest.fixture(scope="function")
 def whitelist_conf_2(default_conf):
+    default_conf["runmode"] = "dry_run"
     default_conf["stake_currency"] = "BTC"
     default_conf["exchange"]["pair_whitelist"] = [
         "ETH/BTC",
@@ -94,6 +96,7 @@ def whitelist_conf_2(default_conf):
 
 @pytest.fixture(scope="function")
 def whitelist_conf_agefilter(default_conf):
+    default_conf["runmode"] = "dry_run"
     default_conf["stake_currency"] = "BTC"
     default_conf["exchange"]["pair_whitelist"] = [
         "ETH/BTC",
@@ -773,7 +776,7 @@ def test_VolumePairList_whitelist_gen(
     whitelist_result,
     caplog,
 ) -> None:
-    whitelist_conf["runmode"] = "backtest"
+    whitelist_conf["runmode"] = "util_exchange"
     whitelist_conf["pairlists"] = pairlists
     whitelist_conf["stake_currency"] = base_currency
 
@@ -2209,7 +2212,7 @@ def test_FullTradesFilter(mocker, default_conf_usdt, fee, caplog) -> None:
 
 
 @pytest.mark.parametrize(
-    "pairlists,trade_mode,result",
+    "pairlists,trade_mode,result,coin_market_calls",
     [
         (
             [
@@ -2219,6 +2222,7 @@ def test_FullTradesFilter(mocker, default_conf_usdt, fee, caplog) -> None:
             ],
             "spot",
             ["BTC/USDT", "ETH/USDT"],
+            1,
         ),
         (
             [
@@ -2228,6 +2232,7 @@ def test_FullTradesFilter(mocker, default_conf_usdt, fee, caplog) -> None:
             ],
             "spot",
             ["BTC/USDT", "ETH/USDT", "XRP/USDT", "ADA/USDT"],
+            1,
         ),
         (
             [
@@ -2237,6 +2242,7 @@ def test_FullTradesFilter(mocker, default_conf_usdt, fee, caplog) -> None:
             ],
             "spot",
             ["BTC/USDT", "ETH/USDT", "XRP/USDT"],
+            1,
         ),
         (
             [
@@ -2246,6 +2252,7 @@ def test_FullTradesFilter(mocker, default_conf_usdt, fee, caplog) -> None:
             ],
             "spot",
             ["BTC/USDT", "ETH/USDT", "XRP/USDT"],
+            1,
         ),
         (
             [
@@ -2254,6 +2261,7 @@ def test_FullTradesFilter(mocker, default_conf_usdt, fee, caplog) -> None:
             ],
             "spot",
             ["BTC/USDT", "ETH/USDT", "XRP/USDT"],
+            1,
         ),
         (
             [
@@ -2262,6 +2270,7 @@ def test_FullTradesFilter(mocker, default_conf_usdt, fee, caplog) -> None:
             ],
             "spot",
             ["BTC/USDT", "ETH/USDT"],
+            1,
         ),
         (
             [
@@ -2270,6 +2279,7 @@ def test_FullTradesFilter(mocker, default_conf_usdt, fee, caplog) -> None:
             ],
             "futures",
             ["ETH/USDT:USDT"],
+            1,
         ),
         (
             [
@@ -2278,11 +2288,34 @@ def test_FullTradesFilter(mocker, default_conf_usdt, fee, caplog) -> None:
             ],
             "futures",
             ["ETH/USDT:USDT", "ADA/USDT:USDT"],
+            1,
+        ),
+        (
+            [
+                # MarketCapPairList as generator - futures, 1 category
+                {"method": "MarketCapPairList", "number_assets": 2, "categories": ["layer-1"]}
+            ],
+            "futures",
+            ["ETH/USDT:USDT", "ADA/USDT:USDT"],
+            ["layer-1"],
+        ),
+        (
+            [
+                # MarketCapPairList as generator - futures, 1 category
+                {
+                    "method": "MarketCapPairList",
+                    "number_assets": 2,
+                    "categories": ["layer-1", "protocol"],
+                }
+            ],
+            "futures",
+            ["ETH/USDT:USDT", "ADA/USDT:USDT"],
+            ["layer-1", "protocol"],
         ),
     ],
 )
 def test_MarketCapPairList_filter(
-    mocker, default_conf_usdt, trade_mode, markets, pairlists, result
+    mocker, default_conf_usdt, trade_mode, markets, pairlists, result, coin_market_calls
 ):
     test_value = [
         {"symbol": "btc"},
@@ -2306,8 +2339,16 @@ def test_MarketCapPairList_filter(
         markets=PropertyMock(return_value=markets),
         exchange_has=MagicMock(return_value=True),
     )
-
     mocker.patch(
+        "freqtrade.plugins.pairlist.MarketCapPairList.FtCoinGeckoApi.get_coins_categories_list",
+        return_value=[
+            {"category_id": "layer-1"},
+            {"category_id": "protocol"},
+            {"category_id": "defi"},
+        ],
+    )
+
+    gcm_mock = mocker.patch(
         "freqtrade.plugins.pairlist.MarketCapPairList.FtCoinGeckoApi.get_coins_markets",
         return_value=test_value,
     )
@@ -2316,6 +2357,15 @@ def test_MarketCapPairList_filter(
 
     pm = PairListManager(exchange, default_conf_usdt)
     pm.refresh_pairlist()
+    if isinstance(coin_market_calls, int):
+        assert gcm_mock.call_count == coin_market_calls
+    else:
+        assert gcm_mock.call_count == len(coin_market_calls)
+        for call in coin_market_calls:
+            assert any(
+                "category" in c.kwargs and c.kwargs["category"] == call
+                for c in gcm_mock.call_args_list
+            )
 
     assert pm.whitelist == result
 
@@ -2373,7 +2423,34 @@ def test_MarketCapPairList_timing(mocker, default_conf_usdt, markets, time_machi
     assert markets_mock.call_count == 3
 
 
-def test_MarketCapPairList_exceptions(mocker, default_conf_usdt):
+def test_MarketCapPairList_filter_special_no_pair_from_coingecko(
+    mocker,
+    default_conf_usdt,
+    markets,
+):
+    default_conf_usdt["pairlists"] = [{"method": "MarketCapPairList", "number_assets": 2}]
+
+    mocker.patch.multiple(
+        EXMS,
+        markets=PropertyMock(return_value=markets),
+        exchange_has=MagicMock(return_value=True),
+    )
+
+    # Simulate no pair returned from coingecko
+    gcm_mock = mocker.patch(
+        "freqtrade.plugins.pairlist.MarketCapPairList.FtCoinGeckoApi.get_coins_markets",
+        return_value=[],
+    )
+
+    exchange = get_patched_exchange(mocker, default_conf_usdt)
+
+    pm = PairListManager(exchange, default_conf_usdt)
+    pm.refresh_pairlist()
+    assert gcm_mock.call_count == 1
+    assert pm.whitelist == []
+
+
+def test_MarketCapPairList_exceptions(mocker, default_conf_usdt, caplog):
     exchange = get_patched_exchange(mocker, default_conf_usdt)
     default_conf_usdt["pairlists"] = [{"method": "MarketCapPairList"}]
     with pytest.raises(OperationalException, match=r"`number_assets` not specified.*"):
@@ -2381,9 +2458,90 @@ def test_MarketCapPairList_exceptions(mocker, default_conf_usdt):
         PairListManager(exchange, default_conf_usdt)
 
     default_conf_usdt["pairlists"] = [
-        {"method": "MarketCapPairList", "number_assets": 20, "max_rank": 260}
+        {"method": "MarketCapPairList", "number_assets": 20, "max_rank": 500}
+    ]
+    with caplog.at_level(logging.WARNING):
+        PairListManager(exchange, default_conf_usdt)
+    assert log_has_re("The max rank you have set \\(500\\) is quite high", caplog)
+    # Test invalid coinmarkets list
+    mocker.patch(
+        "freqtrade.plugins.pairlist.MarketCapPairList.FtCoinGeckoApi.get_coins_categories_list",
+        return_value=[
+            {"category_id": "layer-1"},
+            {"category_id": "protocol"},
+            {"category_id": "defi"},
+        ],
+    )
+    default_conf_usdt["pairlists"] = [
+        {
+            "method": "MarketCapPairList",
+            "number_assets": 20,
+            "categories": ["layer-1", "defi", "layer250"],
+        }
     ]
     with pytest.raises(
-        OperationalException, match="This filter only support marketcap rank up to 250."
+        OperationalException, match="Category layer250 not in coingecko category list."
     ):
         PairListManager(exchange, default_conf_usdt)
+
+
+@pytest.mark.parametrize(
+    "pairlists,expected_error,expected_warning",
+    [
+        (
+            [{"method": "StaticPairList"}],
+            None,  # Error
+            None,  # Warning
+        ),
+        (
+            [{"method": "VolumePairList", "number_assets": 10}],
+            "VolumePairList",  # Error
+            None,  # Warning
+        ),
+        (
+            [{"method": "MarketCapPairList", "number_assets": 10}],
+            None,  # Error
+            r"MarketCapPairList.*lookahead.*",  # Warning
+        ),
+        (
+            [{"method": "StaticPairList"}, {"method": "FullTradesFilter"}],
+            None,  # Error
+            r"FullTradesFilter do not generate.*",  # Warning
+        ),
+        (  # combi, fails and warns
+            [
+                {"method": "VolumePairList", "number_assets": 10},
+                {"method": "MarketCapPairList", "number_assets": 10},
+            ],
+            "VolumePairList",  # Error
+            r"MarketCapPairList.*lookahead.*",  # Warning
+        ),
+    ],
+)
+def test_backtesting_modes(
+    mocker, default_conf_usdt, pairlists, expected_error, expected_warning, caplog, markets, tickers
+):
+    default_conf_usdt["runmode"] = "dry_run"
+    default_conf_usdt["pairlists"] = pairlists
+
+    mocker.patch.multiple(
+        EXMS,
+        markets=PropertyMock(return_value=markets),
+        exchange_has=MagicMock(return_value=True),
+        get_tickers=tickers,
+    )
+    exchange = get_patched_exchange(mocker, default_conf_usdt)
+
+    # Dry run mode - works always
+    PairListManager(exchange, default_conf_usdt)
+
+    default_conf_usdt["runmode"] = "backtest"
+    if expected_error:
+        with pytest.raises(OperationalException, match=f"Pairlist Handlers {expected_error}.*"):
+            PairListManager(exchange, default_conf_usdt)
+
+    if not expected_error:
+        PairListManager(exchange, default_conf_usdt)
+
+    if expected_warning:
+        assert log_has_re(f"Pairlist Handlers {expected_warning}", caplog)

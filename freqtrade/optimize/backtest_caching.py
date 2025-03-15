@@ -1,7 +1,6 @@
 import hashlib
 from copy import deepcopy
 from pathlib import Path
-from typing import Union
 
 import rapidjson
 
@@ -13,7 +12,7 @@ def get_strategy_run_id(strategy) -> str:
     :param strategy: strategy object.
     :return: hex string id.
     """
-    digest = hashlib.sha1()
+    digest = hashlib.sha1()  # noqa: S324
     config = deepcopy(strategy.config)
 
     # Options that have no impact on results of individual backtest.
@@ -38,7 +37,7 @@ def get_strategy_run_id(strategy) -> str:
     return digest.hexdigest().lower()
 
 
-def get_backtest_metadata_filename(filename: Union[Path, str]) -> Path:
+def get_backtest_metadata_filename(filename: Path | str) -> Path:
     """Return metadata filename for specified backtest results file."""
     filename = Path(filename)
-    return filename.parent / Path(f"{filename.stem}.meta{filename.suffix}")
+    return filename.parent / Path(f"{filename.stem}.meta.json")

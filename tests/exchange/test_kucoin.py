@@ -20,7 +20,7 @@ from tests.exchange.test_exchange import ccxt_exceptionhandlers
 )
 def test_create_stoploss_order_kucoin(default_conf, mocker, limitratio, expected, side, order_type):
     api_mock = MagicMock()
-    order_id = f"test_prod_buy_{randint(0, 10 ** 6)}"
+    order_id = f"test_prod_buy_{randint(0, 10**6)}"
 
     api_mock.create_order = MagicMock(return_value={"id": order_id, "info": {"foo": "bar"}})
     default_conf["dry_run"] = False
@@ -134,7 +134,7 @@ def test_stoploss_order_dry_run_kucoin(default_conf, mocker):
 
 
 def test_stoploss_adjust_kucoin(mocker, default_conf):
-    exchange = get_patched_exchange(mocker, default_conf, id="kucoin")
+    exchange = get_patched_exchange(mocker, default_conf, exchange="kucoin")
     order = {
         "type": "limit",
         "price": 1500,
@@ -154,14 +154,14 @@ def test_stoploss_adjust_kucoin(mocker, default_conf):
 )
 def test_kucoin_create_order(default_conf, mocker, side, ordertype, rate):
     api_mock = MagicMock()
-    order_id = f"test_prod_{side}_{randint(0, 10 ** 6)}"
+    order_id = f"test_prod_{side}_{randint(0, 10**6)}"
     api_mock.create_order = MagicMock(
         return_value={"id": order_id, "info": {"foo": "bar"}, "symbol": "XRP/USDT", "amount": 1}
     )
     default_conf["dry_run"] = False
     mocker.patch(f"{EXMS}.amount_to_precision", lambda s, x, y: y)
     mocker.patch(f"{EXMS}.price_to_precision", lambda s, x, y: y)
-    exchange = get_patched_exchange(mocker, default_conf, api_mock, id="kucoin")
+    exchange = get_patched_exchange(mocker, default_conf, api_mock, exchange="kucoin")
     exchange._set_leverage = MagicMock()
     exchange.set_margin_mode = MagicMock()
 

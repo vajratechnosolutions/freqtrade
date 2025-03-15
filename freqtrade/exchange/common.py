@@ -1,8 +1,9 @@
 import asyncio
 import logging
 import time
+from collections.abc import Callable
 from functools import wraps
-from typing import Any, Callable, Dict, List, Optional, TypeVar, cast, overload
+from typing import Any, TypeVar, cast, overload
 
 from freqtrade.constants import ExchangeConfig
 from freqtrade.exceptions import DDosProtection, RetryableOrderError, TemporaryError
@@ -37,9 +38,11 @@ API_FETCH_ORDER_RETRY_COUNT = 5
 
 BAD_EXCHANGES = {
     "bitmex": "Various reasons.",
-    "phemex": "Does not provide history.",
     "probit": "Requires additional, regular calls to `signIn()`.",
     "poloniex": "Does not provide fetch_order endpoint to fetch both open and closed orders.",
+    "kucoinfutures": "Unsupported futures exchange.",
+    "poloniexfutures": "Unsupported futures exchange.",
+    "binancecoinm": "Unsupported futures exchange.",
 }
 
 MAP_EXCHANGE_CHILDCLASS = {
@@ -47,6 +50,7 @@ MAP_EXCHANGE_CHILDCLASS = {
     "binanceje": "binance",
     "binanceusdm": "binance",
     "okex": "okx",
+    "myokx": "okx",
     "gateio": "gate",
     "huboi": "htx",
 }
@@ -55,16 +59,19 @@ SUPPORTED_EXCHANGES = [
     "binance",
     "bingx",
     "bitmart",
+    "bybit",
     "gate",
     "htx",
+    "hyperliquid",
     "kraken",
     "okx",
 ]
 
 # either the main, or replacement methods (array) is required
-EXCHANGE_HAS_REQUIRED: Dict[str, List[str]] = {
+EXCHANGE_HAS_REQUIRED: dict[str, list[str]] = {
     # Required / private
     "fetchOrder": ["fetchOpenOrder", "fetchClosedOrder"],
+    "fetchL2OrderBook": ["fetchTicker"],
     "cancelOrder": [],
     "createOrder": [],
     "fetchBalance": [],
@@ -92,6 +99,8 @@ EXCHANGE_HAS_OPTIONAL = [
     # 'fetchMarketLeverageTiers',  # Futures initialization
     # 'fetchOpenOrder', 'fetchClosedOrder',  # replacement for fetchOrder
     # 'fetchOpenOrders', 'fetchClosedOrders',  # 'fetchOrders',  # Refinding balance...
+    # ccxt.pro
+    "watchOHLCV",
 ]
 
 
@@ -162,10 +171,14 @@ def retrier(_func: F) -> F: ...
 
 
 @overload
+def retrier(_func: F, *, retries=API_RETRY_COUNT) -> F: ...
+
+
+@overload
 def retrier(*, retries=API_RETRY_COUNT) -> Callable[[F], F]: ...
 
 
-def retrier(_func: Optional[F] = None, *, retries=API_RETRY_COUNT):
+def retrier(_func: F | None = None, *, retries=API_RETRY_COUNT):
     def decorator(f: F) -> F:
         @wraps(f)
         def wrapper(*args, **kwargs):
@@ -178,7 +191,7 @@ def retrier(_func: Optional[F] = None, *, retries=API_RETRY_COUNT):
                     logger.warning(msg + f"Retrying still for {count} times.")
                     count -= 1
                     kwargs.update({"count": count})
-                    if isinstance(ex, (DDosProtection, RetryableOrderError)):
+                    if isinstance(ex, DDosProtection | RetryableOrderError):
                         # increasing backoff
                         backoff_delay = calculate_backoff(count + 1, retries)
                         logger.info(f"Applying DDosProtection backoff delay: {backoff_delay}")

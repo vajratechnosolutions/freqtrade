@@ -6,15 +6,15 @@ Provides dynamic pair list based on trade volumes
 
 import logging
 from datetime import timedelta
-from typing import Any, Dict, List, Literal
+from typing import Any, Literal
 
 from cachetools import TTLCache
 
-from freqtrade.constants import Config, ListPairsWithTimeframes
+from freqtrade.constants import ListPairsWithTimeframes
 from freqtrade.exceptions import OperationalException
 from freqtrade.exchange import timeframe_to_minutes, timeframe_to_prev_date
-from freqtrade.exchange.types import Tickers
-from freqtrade.plugins.pairlist.IPairList import IPairList, PairlistParameter
+from freqtrade.exchange.exchange_types import Tickers
+from freqtrade.plugins.pairlist.IPairList import IPairList, PairlistParameter, SupportsBacktesting
 from freqtrade.util import dt_now, format_ms_time
 
 
@@ -26,16 +26,10 @@ SORT_VALUES = ["quoteVolume"]
 
 class VolumePairList(IPairList):
     is_pairlist_generator = True
+    supports_backtesting = SupportsBacktesting.NO
 
-    def __init__(
-        self,
-        exchange,
-        pairlistmanager,
-        config: Config,
-        pairlistconfig: Dict[str, Any],
-        pairlist_pos: int,
-    ) -> None:
-        super().__init__(exchange, pairlistmanager, config, pairlistconfig, pairlist_pos)
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
 
         if "number_assets" not in self._pairlistconfig:
             raise OperationalException(
@@ -43,7 +37,7 @@ class VolumePairList(IPairList):
                 'for "pairlist.config.number_assets"'
             )
 
-        self._stake_currency = config["stake_currency"]
+        self._stake_currency = self._config["stake_currency"]
         self._number_pairs = self._pairlistconfig["number_assets"]
         self._sort_key: Literal["quoteVolume"] = self._pairlistconfig.get("sort_key", "quoteVolume")
         self._min_value = self._pairlistconfig.get("min_value", 0)
@@ -94,7 +88,7 @@ class VolumePairList(IPairList):
         if not self._validate_keys(self._sort_key):
             raise OperationalException(f"key {self._sort_key} not in {SORT_VALUES}")
 
-        candle_limit = exchange.ohlcv_candle_limit(
+        candle_limit = self._exchange.ohlcv_candle_limit(
             self._lookback_timeframe, self._config["candle_type_def"]
         )
         if self._lookback_period < 0:
@@ -128,7 +122,7 @@ class VolumePairList(IPairList):
         return "Provides dynamic pair list based on trade volumes."
 
     @staticmethod
-    def available_parameters() -> Dict[str, PairlistParameter]:
+    def available_parameters() -> dict[str, PairlistParameter]:
         return {
             "number_assets": {
                 "type": "number",
@@ -176,7 +170,7 @@ class VolumePairList(IPairList):
             },
         }
 
-    def gen_pairlist(self, tickers: Tickers) -> List[str]:
+    def gen_pairlist(self, tickers: Tickers) -> list[str]:
         """
         Generate the pairlist
         :param tickers: Tickers (from exchange.get_tickers). May be cached.
@@ -218,7 +212,7 @@ class VolumePairList(IPairList):
 
         return pairlist
 
-    def filter_pairlist(self, pairlist: List[str], tickers: Dict) -> List[str]:
+    def filter_pairlist(self, pairlist: list[str], tickers: dict) -> list[str]:
         """
         Filters and sorts pairlist and returns the whitelist again.
         Called on each bot iteration - please use internal caching if necessary
@@ -228,7 +222,7 @@ class VolumePairList(IPairList):
         """
         if self._use_range:
             # Create bare minimum from tickers structure.
-            filtered_tickers: List[Dict[str, Any]] = [{"symbol": k} for k in pairlist]
+            filtered_tickers: list[dict[str, Any]] = [{"symbol": k} for k in pairlist]
 
             # get lookback period in ms, for exchange ohlcv fetch
             since_ms = (

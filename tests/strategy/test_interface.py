@@ -1,5 +1,6 @@
 # pragma pylint: disable=missing-docstring, C0103
 import logging
+import math
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -26,15 +27,8 @@ from freqtrade.strategy.parameters import (
     IntParameter,
     RealParameter,
 )
-from freqtrade.strategy.strategy_wrapper import strategy_safe_wrapper
 from freqtrade.util import dt_now
-from tests.conftest import (
-    CURRENT_TEST_STRATEGY,
-    TRADE_SIDES,
-    create_mock_trades,
-    log_has,
-    log_has_re,
-)
+from tests.conftest import CURRENT_TEST_STRATEGY, TRADE_SIDES, log_has, log_has_re
 
 from .strats.strategy_test_v3 import StrategyTestV3
 
@@ -295,13 +289,6 @@ def test_assert_df(ohlcv_history, caplog):
             ohlcv_history.loc[df_len, "close"],
             ohlcv_history.loc[0, "date"],
         )
-    with pytest.raises(StrategyError, match="enter_long/buy column not set."):
-        _STRATEGY.assert_df(
-            ohlcv_history.drop("enter_long", axis=1),
-            len(ohlcv_history),
-            ohlcv_history.loc[df_len, "close"],
-            ohlcv_history.loc[0, "date"],
-        )
 
     _STRATEGY.disable_dataframe_checks = True
     caplog.clear()
@@ -458,55 +445,66 @@ def test_min_roi_reached3(default_conf, fee) -> None:
             ExitType.TRAILING_STOP_LOSS,
             None,
         ),
-        (0.01, 0.96, ExitType.NONE, None, True, False, 0.05, 1, ExitType.NONE, None),
-        (0.05, 1, ExitType.NONE, None, True, False, -0.01, 1, ExitType.TRAILING_STOP_LOSS, None),
+        (0.01, 0.96, ExitType.NONE, None, True, False, 0.05, 0.998, ExitType.NONE, None),
+        (
+            0.05,
+            0.998,
+            ExitType.NONE,
+            None,
+            True,
+            False,
+            -0.01,
+            0.998,
+            ExitType.TRAILING_STOP_LOSS,
+            None,
+        ),
         # Default custom case - trails with 10%
-        (0.05, 0.95, ExitType.NONE, None, False, True, -0.02, 0.95, ExitType.NONE, None),
+        (0.05, 0.945, ExitType.NONE, None, False, True, -0.02, 0.945, ExitType.NONE, None),
         (
             0.05,
-            0.95,
+            0.945,
             ExitType.NONE,
             None,
             False,
             True,
             -0.06,
-            0.95,
+            0.945,
             ExitType.TRAILING_STOP_LOSS,
             None,
         ),
         (
             0.05,
-            1,
+            0.998,
             ExitType.NONE,
             None,
             False,
             True,
             -0.06,
-            1,
+            0.998,
             ExitType.TRAILING_STOP_LOSS,
             lambda **kwargs: -0.05,
         ),
         (
             0.05,
-            1,
+            0.998,
             ExitType.NONE,
             None,
             False,
             True,
             0.09,
-            1.04,
+            1.036,
             ExitType.NONE,
             lambda **kwargs: -0.05,
         ),
         (
             0.05,
-            0.95,
+            0.945,
             ExitType.NONE,
             None,
             False,
             True,
             0.09,
-            0.98,
+            0.981,
             ExitType.NONE,
             lambda current_profit, **kwargs: (
                 -0.1 if current_profit < 0.6 else -(current_profit * 2)
@@ -524,6 +522,19 @@ def test_min_roi_reached3(default_conf, fee) -> None:
             0.9,
             ExitType.NONE,
             lambda **kwargs: None,
+        ),
+        # Error case - Returning inf.
+        (
+            0.05,
+            0.9,
+            ExitType.NONE,
+            None,
+            False,
+            True,
+            0.09,
+            0.9,
+            ExitType.NONE,
+            lambda **kwargs: math.inf,
         ),
     ],
 )
@@ -552,6 +563,9 @@ def test_ft_stoploss_reached(
         exchange="binance",
         open_rate=1,
         liquidation_price=liq,
+        price_precision=4,
+        precision_mode=2,
+        precision_mode_price=2,
     )
     trade.adjust_min_max_rates(trade.open_rate, trade.open_rate)
     strategy.trailing_stop = trailing
@@ -577,7 +591,7 @@ def test_ft_stoploss_reached(
         assert sl_flag.exit_flag is False
     else:
         assert sl_flag.exit_flag is True
-    assert round(trade.stop_loss, 2) == adjusted
+    assert round(trade.stop_loss, 3) == adjusted
     current_rate2 = trade.open_rate * (1 + profit2)
 
     sl_flag = strategy.ft_stoploss_reached(
@@ -593,7 +607,7 @@ def test_ft_stoploss_reached(
         assert sl_flag.exit_flag is False
     else:
         assert sl_flag.exit_flag is True
-    assert round(trade.stop_loss, 2) == adjusted2
+    assert round(trade.stop_loss, 3) == adjusted2
 
     strategy.custom_stoploss = original_stopvalue
 
@@ -877,68 +891,6 @@ def test_is_informative_pairs_callback(default_conf):
     # Should return empty
     # Uses fallback to base implementation
     assert [] == strategy.gather_informative_pairs()
-
-
-@pytest.mark.parametrize(
-    "error",
-    [
-        ValueError,
-        KeyError,
-        Exception,
-    ],
-)
-def test_strategy_safe_wrapper_error(caplog, error):
-    def failing_method():
-        raise error("This is an error.")
-
-    with pytest.raises(StrategyError, match=r"This is an error."):
-        strategy_safe_wrapper(failing_method, message="DeadBeef")()
-
-    assert log_has_re(r"DeadBeef.*", caplog)
-    ret = strategy_safe_wrapper(failing_method, message="DeadBeef", default_retval=True)()
-
-    assert isinstance(ret, bool)
-    assert ret
-
-    caplog.clear()
-    # Test suppressing error
-    ret = strategy_safe_wrapper(failing_method, message="DeadBeef", supress_error=True)()
-    assert log_has_re(r"DeadBeef.*", caplog)
-
-
-@pytest.mark.parametrize(
-    "value", [1, 22, 55, True, False, {"a": 1, "b": "112"}, [1, 2, 3, 4], (4, 2, 3, 6)]
-)
-def test_strategy_safe_wrapper(value):
-    def working_method(argumentpassedin):
-        return argumentpassedin
-
-    ret = strategy_safe_wrapper(working_method, message="DeadBeef")(value)
-
-    assert isinstance(ret, type(value))
-    assert ret == value
-
-
-@pytest.mark.usefixtures("init_persistence")
-def test_strategy_safe_wrapper_trade_copy(fee):
-    create_mock_trades(fee)
-
-    def working_method(trade):
-        assert len(trade.orders) > 0
-        assert trade.orders
-        trade.orders = []
-        assert len(trade.orders) == 0
-        return trade
-
-    trade = Trade.get_open_trades()[0]
-    # Don't assert anything before strategy_wrapper.
-    # This ensures that relationship loading works correctly.
-    ret = strategy_safe_wrapper(working_method, message="DeadBeef")(trade=trade)
-    assert isinstance(ret, Trade)
-    assert id(trade) != id(ret)
-    # Did not modify the original order
-    assert len(trade.orders) > 0
-    assert len(ret.orders) == 0
 
 
 def test_hyperopt_parameters():

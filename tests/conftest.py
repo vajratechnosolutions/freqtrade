@@ -1,11 +1,11 @@
 # pragma pylint: disable=missing-docstring
 import json
 import logging
+import platform
 import re
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
 from unittest.mock import MagicMock, Mock, PropertyMock
 
 import numpy as np
@@ -124,7 +124,7 @@ def get_args(args):
     return Arguments(args).get_parsed_arg()
 
 
-def generate_trades_history(n_rows, start_date: Optional[datetime] = None, days=5):
+def generate_trades_history(n_rows, start_date: datetime | None = None, days=5):
     np.random.seed(42)
     if not start_date:
         start_date = datetime(2020, 1, 1, tzinfo=timezone.utc)
@@ -137,7 +137,7 @@ def generate_trades_history(n_rows, start_date: Optional[datetime] = None, days=
     random_timestamps_in_seconds = np.random.uniform(_start_timestamp, _end_timestamp, n_rows)
     timestamp = pd.to_datetime(random_timestamps_in_seconds, unit="s")
 
-    id = [
+    trade_id = [
         f"a{np.random.randint(1e6, 1e7 - 1)}cd{np.random.randint(100, 999)}" for _ in range(n_rows)
     ]
 
@@ -155,7 +155,7 @@ def generate_trades_history(n_rows, start_date: Optional[datetime] = None, days=
     df = pd.DataFrame(
         {
             "timestamp": timestamp,
-            "id": id,
+            "id": trade_id,
             "type": None,
             "side": side,
             "price": price,
@@ -206,7 +206,7 @@ def generate_test_data_raw(timeframe: str, size: int, start: str = "2020-07-05",
     """Generates data in the ohlcv format used by ccxt"""
     df = generate_test_data(timeframe, size, start, random_seed)
     df["date"] = df.loc[:, "date"].astype(np.int64) // 1000 // 1000
-    return list(list(x) for x in zip(*(df[x].values.tolist() for x in df.columns)))
+    return list(list(x) for x in zip(*(df[x].values.tolist() for x in df.columns), strict=False))
 
 
 # Source: https://stackoverflow.com/questions/29881236/how-to-mock-asyncio-coroutines
@@ -236,13 +236,14 @@ def patched_configuration_load_config_file(mocker, config) -> None:
 
 
 def patch_exchange(
-    mocker, api_mock=None, id="binance", mock_markets=True, mock_supported_modes=True
+    mocker, api_mock=None, exchange="binance", mock_markets=True, mock_supported_modes=True
 ) -> None:
     mocker.patch(f"{EXMS}.validate_config", MagicMock())
     mocker.patch(f"{EXMS}.validate_timeframes", MagicMock())
-    mocker.patch(f"{EXMS}.id", PropertyMock(return_value=id))
-    mocker.patch(f"{EXMS}.name", PropertyMock(return_value=id.title()))
+    mocker.patch(f"{EXMS}.id", PropertyMock(return_value=exchange))
+    mocker.patch(f"{EXMS}.name", PropertyMock(return_value=exchange.title()))
     mocker.patch(f"{EXMS}.precisionMode", PropertyMock(return_value=2))
+    mocker.patch(f"{EXMS}.precision_mode_price", PropertyMock(return_value=2))
     # Temporary patch ...
     mocker.patch("freqtrade.exchange.bybit.Bybit.cache_leverage_tiers")
 
@@ -254,7 +255,8 @@ def patch_exchange(
 
     if mock_supported_modes:
         mocker.patch(
-            f"freqtrade.exchange.{id}.{id.capitalize()}._supported_trading_mode_margin_pairs",
+            f"freqtrade.exchange.{exchange}.{exchange.capitalize()}"
+            "._supported_trading_mode_margin_pairs",
             PropertyMock(
                 return_value=[
                     (TradingMode.MARGIN, MarginMode.CROSS),
@@ -274,10 +276,10 @@ def patch_exchange(
 
 
 def get_patched_exchange(
-    mocker, config, api_mock=None, id="binance", mock_markets=True, mock_supported_modes=True
+    mocker, config, api_mock=None, exchange="binance", mock_markets=True, mock_supported_modes=True
 ) -> Exchange:
-    patch_exchange(mocker, api_mock, id, mock_markets, mock_supported_modes)
-    config["exchange"]["name"] = id
+    patch_exchange(mocker, api_mock, exchange, mock_markets, mock_supported_modes)
+    config["exchange"]["name"] = exchange
     try:
         exchange = ExchangeResolver.load_exchange(config, load_leverage_tiers=True)
     except ImportError:
@@ -361,8 +363,8 @@ def patch_get_signal(
     exit_long=False,
     enter_short=False,
     exit_short=False,
-    enter_tag: Optional[str] = None,
-    exit_tag: Optional[str] = None,
+    enter_tag: str | None = None,
+    exit_tag: str | None = None,
 ) -> None:
     """
     :param mocker: mocker to patch IStrategy class
@@ -393,7 +395,7 @@ def patch_get_signal(
     freqtrade.exchange.refresh_latest_ohlcv = lambda p: None
 
 
-def create_mock_trades(fee, is_short: Optional[bool] = False, use_db: bool = True):
+def create_mock_trades(fee, is_short: bool | None = False, use_db: bool = True):
     """
     Create some fake trades ...
     :param is_short: Optional bool, None creates a mix of long and short trades.
@@ -472,7 +474,7 @@ def create_mock_trades_with_leverage(fee, use_db: bool = True):
         Trade.session.flush()
 
 
-def create_mock_trades_usdt(fee, is_short: Optional[bool] = False, use_db: bool = True):
+def create_mock_trades_usdt(fee, is_short: bool | None = False, use_db: bool = True):
     """
     Create some fake trades ...
     """
@@ -514,6 +516,30 @@ def create_mock_trades_usdt(fee, is_short: Optional[bool] = False, use_db: bool 
 @pytest.fixture(autouse=True)
 def patch_gc(mocker) -> None:
     mocker.patch("freqtrade.main.gc_set_threshold")
+
+
+def is_arm() -> bool:
+    machine = platform.machine()
+    return "arm" in machine or "aarch64" in machine
+
+
+def is_mac() -> bool:
+    machine = platform.system()
+    return "Darwin" in machine
+
+
+@pytest.fixture(autouse=True)
+def patch_torch_initlogs(mocker) -> None:
+    if is_mac():
+        # Mock torch import completely
+        import sys
+        import types
+
+        module_name = "torch"
+        mocked_module = types.ModuleType(module_name)
+        sys.modules[module_name] = mocked_module
+    else:
+        mocker.patch("torch._logging._init_logs")
 
 
 @pytest.fixture(autouse=True)
@@ -587,6 +613,7 @@ def get_default_conf(testdatadir):
         "exchange": {
             "name": "binance",
             "key": "key",
+            "enable_ws": False,
             "secret": "secret",
             "pair_whitelist": ["ETH/BTC", "LTC/BTC", "XRP/BTC", "NEO/BTC"],
             "pair_blacklist": [
@@ -598,7 +625,7 @@ def get_default_conf(testdatadir):
         "telegram": {
             "enabled": False,
             "token": "token",
-            "chat_id": "0",
+            "chat_id": "1235",
             "notification_settings": {},
         },
         "datadir": Path(testdatadir),
@@ -612,7 +639,10 @@ def get_default_conf(testdatadir):
         "internals": {},
         "export": "none",
         "dataformat_ohlcv": "feather",
+        "dataformat_trades": "feather",
         "runmode": "dry_run",
+        "trading_mode": "spot",
+        "margin_mode": "",
         "candle_type_def": CandleType.SPOT,
     }
     return configuration
@@ -628,6 +658,7 @@ def get_default_conf_usdt(testdatadir):
                 "name": "binance",
                 "enabled": True,
                 "key": "key",
+                "enable_ws": False,
                 "secret": "secret",
                 "pair_whitelist": [
                     "ETH/USDT",
@@ -950,6 +981,29 @@ def get_markets():
                 "amount": {"min": 1.0, "max": 90000000.0},
                 "price": {"min": None, "max": None},
                 "cost": {"min": 0.0001, "max": None},
+                "leverage": {
+                    "min": None,
+                    "max": None,
+                },
+            },
+            "info": {},
+        },
+        "ETC/BTC": {
+            "id": "ETCBTC",
+            "symbol": "ETC/BTC",
+            "base": "ETC",
+            "quote": "BTC",
+            "active": True,
+            "spot": True,
+            "swap": False,
+            "linear": None,
+            "type": "spot",
+            "contractSize": None,
+            "precision": {"base": 8, "quote": 8, "amount": 2, "price": 7},
+            "limits": {
+                "amount": {"min": 0.01, "max": 90000000.0},
+                "price": {"min": 1e-07, "max": 1000.0},
+                "cost": {"min": 0.0001, "max": 9000000.0},
                 "leverage": {
                     "min": None,
                     "max": None,
@@ -1725,15 +1779,6 @@ def limit_buy_order_open():
     }
 
 
-@pytest.fixture(scope="function")
-def limit_buy_order(limit_buy_order_open):
-    order = deepcopy(limit_buy_order_open)
-    order["status"] = "closed"
-    order["filled"] = order["amount"]
-    order["remaining"] = 0.0
-    return order
-
-
 @pytest.fixture
 def limit_buy_order_old():
     return {
@@ -2184,7 +2229,7 @@ def tickers():
                 "first": None,
                 "last": 530.21,
                 "change": 0.558,
-                "percentage": None,
+                "percentage": 2.349,
                 "average": None,
                 "baseVolume": 72300.0659,
                 "quoteVolume": 37670097.3022171,
@@ -2206,7 +2251,7 @@ def tickers():
                 "first": None,
                 "last": 8603.67,
                 "change": -0.879,
-                "percentage": None,
+                "percentage": -8.95,
                 "average": None,
                 "baseVolume": 30414.604298,
                 "quoteVolume": 259629896.48584127,
@@ -2250,7 +2295,7 @@ def tickers():
                 "first": None,
                 "last": 129.28,
                 "change": 1.795,
-                "percentage": None,
+                "percentage": -2.5,
                 "average": None,
                 "baseVolume": 59698.79897,
                 "quoteVolume": 29132399.743954,
